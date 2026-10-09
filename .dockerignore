@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (runtime state, not for image)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.log
+data/backups/
+data/snapshot_*.json
+data/ai_config.json
+
+# Logs
+*.log
+logs/
+
+# Legacy
+_legacy/
+
+# Git
+.git/
+.gitignore
+
+# Docs / configs not needed in image
+docs/
+*.md
+ruff.toml
+.editorconfig
+.pre-commit-config.yaml

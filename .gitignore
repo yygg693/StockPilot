@@ -1,0 +1,43 @@
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+ruff_report.txt
+
+# Node
+node_modules/
+frontend-v2/dist/
+
+# Data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/snapshot_*.json
+data/*.log
+data/ai_config.json
+data/.ai_config_*
+data/ai_cache/
+data/backups/
+
+# Deprecated mini program copy (authoritative source lives in WeChatProjects)
+miniapp-legacy/
+
+# Logs
+*.log
+logs/
+
+# Secrets
+.env
+config.yaml
+
+# Tooling / local caches
+.workbuddy/
+.pipcache/
+
+# IDE
+.vscode/
+.idea/

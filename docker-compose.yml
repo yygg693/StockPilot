@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: .
+      target: backend-runtime
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      target: frontend-runtime
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Database backup scheduler (runs daily at 2 AM)
+  backup:
+    build:
+      context: .
+      target: backend-runtime
+    volumes:
+      - ./data:/app/data
+    entrypoint: ["python", "scripts/backup_db.py", "--keep", "30"]
+    restart: "no"
+    profiles: ["backup"]  # Only run on demand: docker compose --profile backup run backup
