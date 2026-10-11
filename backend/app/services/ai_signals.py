@@ -371,13 +371,13 @@ async def ai_filter_signals(signals: list[dict], market_context: str = "") -> st
         f"  {s['code']}: {s['signal']}(评分{s['score']},置信度{s.get('confidence', 0)}%), 原因: {', '.join(s['reasons'])}"
         for s in signals[:8]
     )
-    prompt = f"""以下是技术面生成的交易信号，请给出简短的操作建议（不超过150字）：
+    prompt = f"""以下是技术面生成的量化信号，请仅做客观解读与信息整理（不超过150字）：
 
 {sig_text}
 
 {market_context}
 
-请判断哪些信号值得执行，哪些可能是假信号，给出优先级排序。"""
+请说明这些信号分别基于哪些技术维度、有何局限性，并提示信号可能存在假信号风险。所有内容仅供学习参考，不构成交易指令。"""
 
     # Multi-model switching: use configured base_url and model
     api_url = f"{settings.ai.base_url}/chat/completions"
@@ -385,7 +385,7 @@ async def ai_filter_signals(signals: list[dict], market_context: str = "") -> st
         resp = await client.post(api_url, json={
             "model": settings.ai.model,
             "messages": [
-                {"role": "system", "content": "你是量化交易顾问，擅长A股技术面分析。回复简洁，用纯文本，禁止使用*#等markdown符号。"},
+                {"role": "system", "content": "你是量化数据分析助手，擅长A股技术面数据的客观解读。回复简洁，用纯文本，禁止使用*#等markdown符号；仅呈现数据维度与风险提示，不给出确定性买卖指令。"},
                 {"role": "user", "content": prompt},
             ],
             "max_tokens": 300,

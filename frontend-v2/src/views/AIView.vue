@@ -37,6 +37,11 @@ const roleIcons: Record<string, string> = {
       <p class="page-desc">多角色并行分析，综合基本面、技术面与风控视角</p>
     </div>
 
+    <div class="compliance-banner">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+      <span>本工具为个人学习用途，所有 AI 分析仅为公开数据的整理与信息呈现，<strong>不构成投资建议，也不提供确定性买卖指令</strong>。投资决策由您独立做出，盈亏自负。</span>
+    </div>
+
     <div class="card input-card animate-in delay-1" v-liquid>
       <div class="form-row">
         <div class="control-group">
@@ -67,7 +72,7 @@ const roleIcons: Record<string, string> = {
       <div class="card summary-card animate-in delay-3" v-liquid>
         <div class="ai-badge">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-          综合建议
+          AI 综合梳理
         </div>
         <p class="role-text summary-text">{{ result.summary }}</p>
       </div>
@@ -114,4 +119,13 @@ const roleIcons: Record<string, string> = {
 .btn-primary { background: linear-gradient(135deg, var(--accent), #a8884a); color: #0a0c10; box-shadow: 0 4px 14px var(--accent-glow); }
 .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--accent-glow); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.compliance-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: rgba(230, 162, 60, 0.12); border: 1px solid rgba(230, 162, 60, 0.42);
+  border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 20px;
+  font-size: 12px; line-height: 1.7; color: var(--text-secondary);
+}
+.compliance-banner svg { flex-shrink: 0; margin-top: 1px; color: #e6a23c; }
+.compliance-banner strong { color: var(--text-primary); }
 </style>
