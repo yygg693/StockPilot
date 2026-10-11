@@ -10,12 +10,16 @@ let running = false
 function resize() {
   const c = canvas.value
   if (!c) return
-  c.width = window.innerWidth * devicePixelRatio
-  c.height = window.innerHeight * devicePixelRatio
+  // Cap DPR at 1.5: this is a full-screen overlay canvas, so a 2x/3x DPR on a
+  // 4K display means clearing/drawing millions of pixels every frame. Capping
+  // keeps it crisp enough while cutting the per-frame cost dramatically.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+  c.width = window.innerWidth * dpr
+  c.height = window.innerHeight * dpr
   c.style.width = window.innerWidth + 'px'
   c.style.height = window.innerHeight + 'px'
   ctx = c.getContext('2d')
-  if (ctx) ctx.scale(devicePixelRatio, devicePixelRatio)
+  if (ctx) ctx.scale(dpr, dpr)
 }
 
 function draw() {
@@ -58,10 +62,15 @@ function draw() {
     raf = requestAnimationFrame(draw)
   } else {
     raf = 0
+    // Fully hide the canvas when idle so the browser stops compositing this
+    // full-screen overlay layer entirely (zero cost at rest).
+    if (canvas.value) canvas.value.style.display = 'none'
   }
 }
 
 function kick() {
+  // Show the overlay only while particles are actually animating.
+  if (canvas.value) canvas.value.style.display = 'block'
   if (!raf) {
     running = true
     raf = requestAnimationFrame(draw)
@@ -74,6 +83,8 @@ let unsub: (() => void) | null = null
 
 onMounted(() => {
   resize()
+  // Start hidden — only shown when a particle burst is triggered.
+  if (canvas.value) canvas.value.style.display = 'none'
   window.addEventListener('resize', resize)
   unsub = onParticles(() => kick())
 })

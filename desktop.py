@@ -10,6 +10,7 @@ import os
 import time
 import threading
 import socket
+import webbrowser
 
 # Project paths
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +36,28 @@ def check_port(port):
 
 
 def start_backend():
-    """Start uvicorn backend in a thread."""
+    """Start the uvicorn backend.
+
+    - Dev: spawn a separate `python -m uvicorn` process so it can run next to
+      the Vite dev server.
+    - Frozen (PyInstaller --onedir): there is no `python` on PATH inside the
+      bundle, so run uvicorn in-process in a daemon thread against the
+      already-importable app object.
+    """
+    if getattr(sys, "frozen", False):
+        import uvicorn
+        from backend.app.main import app as _app
+        config = uvicorn.Config(
+            _app,
+            host="127.0.0.1",
+            port=BACKEND_PORT,
+            log_level="info",
+            access_log=False,
+        )
+        server = uvicorn.Server(config)
+        threading.Thread(target=server.run, daemon=True).start()
+        return server
+
     import subprocess
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -48,6 +70,17 @@ def start_backend():
         stderr=subprocess.STDOUT,
     )
     return proc
+
+
+def stop_backend(backend) -> None:
+    """Stop the backend, whether it's a subprocess or an in-process server."""
+    if backend is None:
+        return
+    import subprocess
+    if isinstance(backend, subprocess.Popen):
+        backend.terminate()
+    else:  # uvicorn.Server
+        backend.should_exit = True
 
 
 def start_frontend_dev():
@@ -97,11 +130,32 @@ def wait_for_port(port, timeout=15):
     return False
 
 
+class ExternalBridge:
+    """JS-exposed API so the frontend can open URLs in the OS default browser.
+
+    pywebview blocks in-window navigation; links must be opened externally. The
+    settings page calls `window.pywebview.api.open_external(url)` for the
+    "regenerate API key" link so the desktop exe actually launches a browser.
+    """
+
+    def open_external(self, url: str) -> bool:
+        try:
+            return bool(webbrowser.open(str(url)))
+        except Exception:
+            return False
+
+
 def main():
     import webview
 
     prod_mode = "--prod" in sys.argv
     do_build = "--build" in sys.argv
+
+    # Frozen exe (PyInstaller): no source tree, no vite, no node_modules —
+    # always run production mode (backend serves bundled dist/).
+    if getattr(sys, "frozen", False):
+        prod_mode = True
+        do_build = False
 
     print(f"\n{'='*50}")
     print(f"  StockPilot Desktop")
@@ -156,13 +210,14 @@ def main():
         min_size=(1024, 680),
         background_color="#0a0a0f",
         text_select=True,
+        js_api=ExternalBridge(),
     )
     webview.start(debug=not prod_mode)
 
     # Cleanup on window close
     print("[StockPilot] Window closed, shutting down...")
     if backend_proc:
-        backend_proc.terminate()
+        stop_backend(backend_proc)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,56 @@
+# StockPilot 配置示例（committed）
+# ============================================================
+# 这是公开发布的示例配置。复制为 config.yaml 后按需修改。
+# 注意：config.yaml 已被 .gitignore 忽略，请勿把真实密钥写进提交。
+
+# DeepSeek API 配置（可选）
+# 推荐通过环境变量设置（不落盘，最安全）：
+#   Windows:  set STOCKPILOT_AI_API_KEY=sk-xxxxx
+#   Linux/Mac: export STOCKPILOT_AI_API_KEY=sk-xxxxx
+# 也可在网页「设置」页填入（仅在本机加密保存，不进仓库/安装包）。
+# 注意：下方 ai 块为兼容保留，实际生效优先级为
+#   「设置页保存的值」>「STOCKPILOT_AI_* 环境变量」>「内置默认 deepseek-v4-flash」。
+ai:
+  api_key: ""
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"
+  enabled: true
+
+# 服务配置
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+# 安全配置
+security:
+  # CORS 允许的来源（生产环境改为你的域名）
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:5174"
+    - "http://127.0.0.1:5173"
+    - "http://127.0.0.1:8000"
+  # 速率限制：每个 IP 每分钟最大请求数
+  rate_limit_per_minute: 60
+  # AI 接口速率限制：每分钟最大请求数（更严格，桌面单用户场景已放宽）
+  ai_rate_limit_per_minute: 60
+  # JWT 认证密钥：禁止在此填写明文！必须通过环境变量设置：
+  #   Windows:  set STOCKPILOT_SECURITY_JWT_SECRET=<长度≥32的随机串>
+  #   Linux/Mac: export STOCKPILOT_SECURITY_JWT_SECRET=<长度≥32的随机串>
+  # 未设置则 jwt_secret 为空；启用认证(auth_enabled:true)时若密钥不足32位将启动失败，杜绝弱密钥裸奔。
+  jwt_secret: ""
+  # JWT 过期时间（小时）
+  jwt_expire_hours: 24
+  # 是否启用认证。本地/纯内网开发可保持 false；
+  # ⚠️ 任何公开或生产部署前必须改为 true，并先通过环境变量设置强 jwt_secret，否则所有接口完全裸奔。
+  auth_enabled: false
+
+# 数据缓存（分钟）
+cache:
+  quote_ttl: 3       # 实时行情缓存秒数 -> 这里按分钟粗略控制
+  kline_ttl: 30      # K线缓存分钟
+  news_ttl: 30       # 新闻缓存分钟
+
+# 投资纪律参数（AI 决策卡片会用到）
+discipline:
+  chase_high_pct: 10      # 短期涨幅超过该值(%)标记"严禁追高"
+  stop_loss_pct: 8        # 默认止损参考(%)

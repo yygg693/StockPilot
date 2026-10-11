@@ -1,11 +1,17 @@
 """AI analysis routes: single-call comprehensive analysis."""
 from __future__ import annotations
 
+import asyncio
+import json as _json
+import time
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import httpx
+
 from backend.app.core.config import get_settings
+from backend.app.core.disk_cache import disk_get, disk_set
 from backend.app.core.exceptions import AIServiceError
 from backend.app.core.http_client import get_http_client
 from backend.app.core.logging import get_logger
@@ -27,6 +33,82 @@ _DEFAULT_UNIVERSE = [
     "600276", "601012", "002475", "600809", "000568",
     "601888", "300059", "002415", "600585", "601668",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Shared DeepSeek helpers: friendly errors + 429/5xx retry with backoff.
+# ---------------------------------------------------------------------------
+
+def _status_message(status_code: int, detail: str = "") -> str:
+    """Translate an HTTP status returned by DeepSeek into a user-facing hint."""
+    if status_code == 401:
+        return "DeepSeek API Key 无效或已过期，请在「设置」中检查并重新填写 API Key"
+    if status_code == 402:
+        return "DeepSeek 账户余额不足，请前往平台充值后重试"
+    if status_code == 403:
+        return "DeepSeek 账户无访问权限（可能被限制或区域不可用）"
+    if status_code == 404:
+        return "请求的模型不存在，请在「设置」中确认模型名称（推荐 deepseek-v4-flash）"
+    if status_code == 429:
+        return "DeepSeek 请求过于频繁（额度或并发限制），请稍候几秒再试"
+    if 500 <= status_code < 600:
+        return "DeepSeek 服务端暂时异常，请稍后重试"
+    msg = f"AI 请求失败（HTTP {status_code}）"
+    if detail:
+        msg += f"：{detail[:80]}"
+    return msg
+
+
+def _friendly_ai_error(e: Exception) -> str:
+    """Translate any DeepSeek/httpx failure into a readable Chinese message."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return _status_message(e.response.status_code)
+    if isinstance(e, httpx.TimeoutException):
+        return "AI 响应超时，请稍后重试（网络或模型繁忙）"
+    if isinstance(e, httpx.TransportError):
+        return "无法连接 DeepSeek 服务，请检查网络连接"
+    return f"AI 调用失败：{str(e)[:120]}"
+
+
+def _is_retryable(status_code: int) -> bool:
+    return status_code in (429, 500, 502, 503, 504)
+
+
+async def _deepseek_chat(
+    client, base_url: str, api_key: str, payload: dict, timeout: float = 60.0, max_retries: int = 2
+) -> dict:
+    """POST to DeepSeek chat/completions with exponential backoff on 429/5xx.
+
+    Returns the parsed JSON body. Raises ``httpx.HTTPStatusError`` on a
+    non-retryable status, or a transport error (timeout/connect) after retries
+    are exhausted, so callers can translate them with ``_friendly_ai_error``.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
+            if _is_retryable(r.status_code) and attempt < max_retries:
+                last_exc = httpx.HTTPStatusError(
+                    f"DeepSeek returned {r.status_code}", request=r.request, response=r
+                )
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            return r.json()
+        except httpx.TransportError as e:
+            last_exc = e
+            if attempt < max_retries:
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            raise
+    # Exhausted retries on a status error -> raise it so the caller can translate.
+    assert last_exc is not None
+    raise last_exc
 
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -58,13 +140,11 @@ async def analyze(req: AnalyzeRequest):
     user_msg = f"请分析以下股票：{req.name}（{req.code}）。{context}"
 
     try:
-        r = await client.post(
-            f"{settings.ai.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.ai.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        data = await _deepseek_chat(
+            client,
+            settings.ai.base_url,
+            settings.ai.api_key,
+            {
                 "model": settings.ai.model,
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
@@ -75,8 +155,6 @@ async def analyze(req: AnalyzeRequest):
             },
             timeout=90.0,
         )
-        r.raise_for_status()
-        data = r.json()
         text = data["choices"][0]["message"]["content"]
         # Clean any residual markdown
         text = text.replace("**", "").replace("###", "").replace("##", "").replace("#", "").replace("*", "")
@@ -99,7 +177,7 @@ async def analyze(req: AnalyzeRequest):
         }}
     except Exception as e:
         logger.error("ai.call_failed", error=str(e))
-        raise AIServiceError("AI analysis failed", detail=str(e)) from e
+        raise AIServiceError("AI 分析失败", detail=_friendly_ai_error(e)) from e
 
 
 # ---------- Market Summary ----------
@@ -120,20 +198,40 @@ _BREADTH_POOL = ','.join([
 ])
 
 
+# Market summary cache (memory + disk). The dashboard fires this on every
+# navigation, so without caching it would burn a DeepSeek call each time and
+# quickly hit rate/quota limits. 5-minute TTL is plenty for a market overview.
+_market_cache: dict = {"data": None, "ts": 0}
+_MARKET_TTL = 300  # 5 minutes
+
+
 @router.get('/ai/market-summary')
-async def market_summary():
+async def market_summary(refresh: bool = False):
     settings = get_settings()
     if not settings.ai.configured or not settings.ai.enabled:
-        return {'data': {'summary': None, 'error': 'AI service not configured'}}
+        return {'data': {'summary': None, 'error': 'AI 服务未配置或未启用，请在「设置」中填写 API Key'}}
 
     client = get_http_client()
+
+    # 1) Memory cache
+    now = time.time()
+    if not refresh and _market_cache["data"] and now - _market_cache["ts"] < _MARKET_TTL:
+        return {'data': {'summary': _market_cache["data"], 'error': None, 'cached': True}}
+
+    # 2) Disk cache (survives restart)
+    if not refresh:
+        disked = disk_get("market_summary", _MARKET_TTL)
+        if disked is not None:
+            _market_cache["data"] = disked
+            _market_cache["ts"] = now
+            return {'data': {'summary': disked, 'error': None, 'cached': True}}
 
     # Gather market data
     try:
         quotes = await fetch_quote_batch(client, _INDEX_CODES + _BREADTH_POOL.split(','))
     except Exception as e:
         logger.error('market_summary.fetch_failed', error=str(e))
-        return {'data': {'summary': None, 'error': 'Failed to fetch market data'}}
+        return {'data': {'summary': None, 'error': '行情数据获取失败，请稍后重试'}}
 
     # Build index summary
     idx_lines = []
@@ -168,13 +266,11 @@ async def market_summary():
 领跌: {bot3}"""
 
     try:
-        r = await client.post(
-            f'{settings.ai.base_url}/chat/completions',
-            headers={
-                'Authorization': f'Bearer {settings.ai.api_key}',
-                'Content-Type': 'application/json',
-            },
-            json={
+        data = await _deepseek_chat(
+            client,
+            settings.ai.base_url,
+            settings.ai.api_key,
+            {
                 'model': settings.ai.model,
                 'messages': [
                     {'role': 'system', 'content': _MARKET_PROMPT},
@@ -185,13 +281,17 @@ async def market_summary():
             },
             timeout=60.0,
         )
-        r.raise_for_status()
-        data = r.json()
         text = data['choices'][0]['message']['content'].strip()
+        if not text:
+            return {'data': {'summary': None, 'error': 'AI 返回内容为空，请重试'}}
+        # Persist to cache (memory + disk)
+        _market_cache["data"] = text
+        _market_cache["ts"] = now
+        disk_set("market_summary", text)
         return {'data': {'summary': text, 'error': None}}
     except Exception as e:
         logger.error('market_summary.ai_failed', error=str(e))
-        return {'data': {'summary': None, 'error': str(e)}}
+        return {'data': {'summary': None, 'error': _friendly_ai_error(e)}}
 
 
 # ---------- Multi-turn AI Chat ----------
@@ -227,7 +327,7 @@ class ChatRequest(BaseModel):
 async def ai_chat(req: ChatRequest):
     settings = get_settings()
     if not settings.ai.configured or not settings.ai.enabled:
-        raise AIServiceError("AI service not configured or disabled")
+        raise AIServiceError("AI 服务未配置或未启用，请在「设置」中填写 API Key")
 
     client = get_http_client()
 
@@ -253,13 +353,11 @@ async def ai_chat(req: ChatRequest):
     try:
         # Function calling loop (max 3 rounds)
         for _round in range(3):
-            r = await client.post(
-                f"{settings.ai.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.ai.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
+            data = await _deepseek_chat(
+                client,
+                settings.ai.base_url,
+                settings.ai.api_key,
+                {
                     "model": settings.ai.model,
                     "messages": messages,
                     "tools": TOOL_DEFINITIONS,
@@ -268,8 +366,6 @@ async def ai_chat(req: ChatRequest):
                 },
                 timeout=60.0,
             )
-            r.raise_for_status()
-            data = r.json()
             choice = data["choices"][0]
             msg = choice["message"]
 
@@ -278,7 +374,6 @@ async def ai_chat(req: ChatRequest):
                 # Add assistant message with tool_calls
                 messages.append(msg)
                 # Execute each tool call
-                import json as _json
                 for tc in msg["tool_calls"]:
                     fn_name = tc["function"]["name"]
                     fn_args = _json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
@@ -309,7 +404,7 @@ async def ai_chat(req: ChatRequest):
         return {"data": {"reply": "抱歉，处理超时，请重试。"}}
     except Exception as e:
         logger.error("ai.chat_failed", error=str(e))
-        raise AIServiceError("AI chat failed", detail=str(e)) from e
+        raise AIServiceError("AI 对话失败", detail=_friendly_ai_error(e)) from e
 
 
 class StreamRequest(BaseModel):
@@ -322,7 +417,7 @@ async def ai_stream(req: StreamRequest):
     """SSE streaming AI chat - returns text/event-stream."""
     settings = get_settings()
     if not settings.ai.configured or not settings.ai.enabled:
-        raise AIServiceError("AI service not configured or disabled")
+        raise AIServiceError("AI 服务未配置或未启用，请在「设置」中填写 API Key")
 
     auto_context = await build_ai_context(
         page=req.context.split("|")[0] if "|" in req.context else "",
@@ -341,48 +436,78 @@ async def ai_stream(req: StreamRequest):
         role = "assistant" if msg.role == "assistant" else "user"
         messages.append({"role": role, "content": msg.content})
 
-    import json as _json
-
-    import httpx
-
     async def event_generator():
-        try:
-            async with httpx.AsyncClient() as stream_client, stream_client.stream(
-                "POST",
-                f"{settings.ai.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.ai.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.ai.model,
-                    "messages": messages,
-                    "temperature": 0.7,
-                    "max_tokens": 600,
-                    "stream": True,
-                },
-                timeout=90.0,
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = _json.loads(payload)
-                        delta = chunk["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            # Clean markdown on the fly
-                            content = content.replace("**", "").replace("`", "").replace("*", "")
-                            yield f"data: {_json.dumps({'text': content}, ensure_ascii=False)}\n\n"
-                    except Exception as e:
-                        logger.warning("ai.stream.chunk_parse_failed", error=str(e))
-                        continue
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            yield f"data: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+        payload = {
+            "model": settings.ai.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 600,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.ai.api_key}",
+            "Content-Type": "application/json",
+        }
+        # Retry the initial connect on 429/5xx / transport errors (DeepSeek
+        # recommends backoff on 429). Once streaming has started we stop retrying.
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=90.0) as stream_client, stream_client.stream(
+                    "POST",
+                    f"{settings.ai.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        if _is_retryable(resp.status_code) and attempt < 2:
+                            last_err = httpx.HTTPStatusError(
+                                f"DeepSeek returned {resp.status_code}",
+                                request=resp.request,
+                                response=resp,
+                            )
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                            continue
+                        # Non-retryable status or retries exhausted: translate it.
+                        detail = ""
+                        try:
+                            detail = (await resp.aread()).decode("utf-8", "ignore")[:80]
+                        except Exception:
+                            pass
+                        yield f"data: {_json.dumps({'error': _status_message(resp.status_code, detail)}, ensure_ascii=False)}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        seg = line[6:]
+                        if seg.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = _json.loads(seg)
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                # Clean markdown on the fly
+                                content = content.replace("**", "").replace("`", "").replace("*", "")
+                                yield f"data: {_json.dumps({'text': content}, ensure_ascii=False)}\n\n"
+                        except Exception as e:
+                            logger.warning("ai.stream.chunk_parse_failed", error=str(e))
+                            continue
+                yield "data: [DONE]\n\n"
+                return
+            except httpx.TransportError as e:
+                last_err = e
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                yield f"data: {_json.dumps({'error': _friendly_ai_error(e)}, ensure_ascii=False)}\n\n"
+                return
+            except Exception as e:
+                logger.error("ai.stream.failed", error=str(e))
+                yield f"data: {_json.dumps({'error': _friendly_ai_error(e)}, ensure_ascii=False)}\n\n"
+                return
+        # Exhausted retries on a status error
+        yield f"data: {_json.dumps({'error': _friendly_ai_error(last_err) if last_err else 'AI 服务暂时不可用，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

@@ -2,9 +2,11 @@
 import subprocess
 import sys
 import os
+from pathlib import Path
 
-FRONTEND_DIR = r"D:\StockPilot\frontend-v2"
-VITE_CMD = os.path.join(FRONTEND_DIR, "node_modules", ".bin", "vite.cmd")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = PROJECT_ROOT / "frontend-v2"
+VITE_CMD = os.path.join(str(FRONTEND_DIR), "node_modules", ".bin", "vite.cmd")
 
 
 def run_build_check():

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue"
+import { ref } from "vue"
 import { useRouter } from "vue-router"
 import { getWatchlist, addWatch, removeWatch, searchStock } from "@/api"
+import { useStaleRefresh } from "@/composables/useStaleRefresh"
 
 const router = useRouter()
 const watchlist = ref<any[]>([])
@@ -55,7 +56,9 @@ function delayHideSearch() {
   setTimeout(() => { showSearch.value = false }, 200)
 }
 
-onMounted(load)
+// Load on first visit; refresh on return only when older than 60s. Manual
+// load() calls (after add/remove) still work and reset the staleness timer.
+useStaleRefresh(load)
 </script>
 
 <template>

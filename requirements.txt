@@ -1,19 +1,29 @@
+# StockPilot 运行/开发依赖
+# 说明：活跃代码（backend/app）只用到下方「核心运行时」。
+# akshare / xtquant(真实券商) / openai / pandas / numpy 均未被活跃代码引用，
+# 已从必装移除，避免桌面打包体积膨胀与无谓安装失败。如需启用对应可选能力，
+# 取消对应行的注释后安装即可。
+
+# --- 核心运行时（桌面端与后端必装）---
 fastapi==0.115.6
-uvicorn==0.34.0
-akshare>=1.16.0
-pandas>=2.2.0
-numpy>=1.26.0
-requests>=2.31.0
-pyyaml>=6.0
-openai>=1.55.0,<2
+uvicorn[standard]==0.34.0
 httpx>=0.27.0
+pydantic>=2.9.0
 pydantic-settings>=2.0.0
+pyyaml>=6.0
 PyJWT>=2.8.0
 aiosqlite>=0.19.0
 structlog>=24.0.0
-xtquant>=250807.1.2
 pywebview>=5.0.0
 
-# --- dev / test (开发测试依赖；一键启动脚本也会安装，便于本地跑 pytest) ---
+# --- 可选集成（默认不打包进桌面端）---
+# 真实券商(QMT)实盘：仅启用 QMT broker 时需要
+# xtquant>=250807.1.2
+# 备用行情源（仅 backend/_legacy 旧路径使用；活跃代码走腾讯/东财 httpx）
+# akshare>=1.16.0
+# 旧版 AI analyst SDK（活跃 AI 路由用裸 httpx 直连 DeepSeek，无需 openai）
+# openai>=1.55.0,<2
+
+# --- 开发/测试（一键启动脚本也会安装，便于本地跑 pytest）---
 pytest>=8.0
 pytest-asyncio>=0.24

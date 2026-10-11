@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue"
+import { ref } from "vue"
 import { useRouter } from "vue-router"
 import { getIndex, getBreadth, getWatchlist, getMarketSummary, getBriefing, getAlerts } from "@/api"
+import { useStaleRefresh } from "@/composables/useStaleRefresh"
 
 const indices = ref<any[]>([])
 const breadth = ref<any>(null)
@@ -62,7 +63,7 @@ function valClass(v: number) { return v > 0 ? "val-up" : v < 0 ? "val-down" : ""
 function fmtPct(v: number) { return (v > 0 ? "+" : "") + v.toFixed(2) + "%" }
 function fmtChange(v: number) { return (v > 0 ? "+" : "") + v.toFixed(2) }
 
-onMounted(async () => {
+async function load() {
   try {
     const [idxRes, brRes, wlRes] = await Promise.all([
       getIndex().catch(() => ({ data: [] })),
@@ -78,7 +79,11 @@ onMounted(async () => {
   fetchAISummary()
   fetchBriefing()
   fetchAlerts()
-})
+}
+
+// First visit loads immediately; returning to this cached view refreshes only
+// when the data is older than 60s (instant switch, no stale-forever).
+useStaleRefresh(load)
 </script>
 
 <template>

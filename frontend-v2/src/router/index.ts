@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
@@ -105,8 +105,14 @@ const routes = [
   },
 ]
 
+// Use hash history for the packaged desktop app. WebView2 (pywebview) has a
+// known race with history.pushState on <a href> navigation that breaks SPA
+// routing in the packaged build (the dev server works fine because it ships a
+// history fallback). Hash mode keeps every navigation strictly client-side and
+// never triggers a server request, which is exactly what we want for a
+// single-port localhost desktop app.
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes,
 })
 

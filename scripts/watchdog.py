@@ -5,11 +5,13 @@ import os
 import sys
 import signal
 from datetime import datetime
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_CMD = ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", "8000"]
-BACKEND_CWD = r"D:\StockPilot"
-FRONTEND_CMD = [r"D:\StockPilot\frontend-v2\node_modules\.bin\vite.cmd", "--port", "5173", "--strictPort"]
-FRONTEND_CWD = r"D:\StockPilot\frontend-v2"
+BACKEND_CWD = PROJECT_ROOT
+FRONTEND_CMD = [str(PROJECT_ROOT / "frontend-v2" / "node_modules" / ".bin" / "vite.cmd"), "--port", "5173", "--strictPort"]
+FRONTEND_CWD = PROJECT_ROOT / "frontend-v2"
 
 CHECK_INTERVAL = 10  # seconds between health checks
 MAX_RESTARTS = 5     # max restarts before giving up

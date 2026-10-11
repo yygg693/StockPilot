@@ -90,10 +90,10 @@ async def test_ai_connection(body: dict, _user: dict = Depends(get_current_user)
     import httpx
     api_key = body.get("api_key", "").strip()
     base_url = body.get("base_url", "https://api.deepseek.com").strip().rstrip("/")
-    model = body.get("model", "deepseek-chat").strip()
+    model = body.get("model", "deepseek-v4-flash").strip()
 
     if not api_key:
-        return {"data": {"success": False, "message": "API Key 不能为空"}}
+        return {"data": {"success": False, "message": "请先输入 API Key", "status": None}}
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -107,14 +107,23 @@ async def test_ai_connection(body: dict, _user: dict = Depends(get_current_user)
                 },
             )
             if r.status_code == 200:
-                return {"data": {"success": True, "message": "连接成功"}}
+                return {"data": {"success": True, "message": "连接成功", "status": 200}}
+            # Translate authentication failures into a clear, actionable message.
+            is_auth = r.status_code in (401, 403)
+            if is_auth:
+                message = "DeepSeek API Key 无效或已过期，请前往平台重新生成"
             else:
-                detail = r.json().get("error", {}).get("message", str(r.status_code)) if r.headers.get("content-type", "").startswith("application/json") else str(r.status_code)
-                return {"data": {"success": False, "message": f"连接失败: {detail}"}}
+                detail = (
+                    r.json().get("error", {}).get("message", str(r.status_code))
+                    if r.headers.get("content-type", "").startswith("application/json")
+                    else str(r.status_code)
+                )
+                message = f"连接失败: {detail}"
+            return {"data": {"success": False, "message": message, "status": r.status_code}}
     except httpx.TimeoutException:
-        return {"data": {"success": False, "message": "连接超时，请检查网络或Base URL"}}
+        return {"data": {"success": False, "message": "连接超时，请检查网络或 Base URL", "status": None}}
     except Exception as e:
-        return {"data": {"success": False, "message": f"连接失败: {str(e)[:100]}"}}
+        return {"data": {"success": False, "message": f"连接失败: {str(e)[:100]}", "status": None}}
 
 
 @router.post("/config/ai/save")
@@ -129,15 +138,15 @@ async def save_ai_config(body: dict, request: Request, _user: dict = Depends(get
 
     api_key = (body.get("api_key") or "").strip()
     base_url = (body.get("base_url") or "https://api.deepseek.com").strip().rstrip("/")
-    model = (body.get("model") or "deepseek-chat").strip()
+    model = (body.get("model") or "deepseek-v4-flash").strip()
     enabled = body.get("enabled", settings.ai.enabled)
     if isinstance(enabled, str):
         enabled = enabled.lower() not in ("0", "false", "no", "")
     enabled = bool(enabled)
 
-    # 1) Persist non-secret fields to disk (api_key is never written to disk;
-    #    it lives in the STOCKPILOT_AI_API_KEY env var or runtime memory).
-    config_module.save_ai_config_to_disk("", base_url, model, enabled)
+    # 1) Persist the full config (including the encrypted api_key) to disk so
+    #    the key survives a backend restart on the same machine.
+    config_module.save_ai_config_to_disk(api_key, base_url, model, enabled)
 
     # 2) Update the cached runtime Settings singleton so the change takes
     #    effect immediately without a restart.

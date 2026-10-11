@@ -5,20 +5,32 @@ import api, { getAIConfig, saveAIConfig, getAIModels } from "@/api"
 // --- State ---
 const apiKey = ref("")
 const baseUrl = ref("https://api.deepseek.com")
+// Currently recommended DeepSeek API models (deepseek-chat/-reasoner were
+// retired on 2026-07-24). Used as the default and as a fallback when the
+// provider model list can't be fetched (e.g. no key / offline).
+const RECOMMENDED_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"]
 const model = ref("deepseek-v4-flash")
-const modelList = ref<string[]>([])
+const modelList = ref<string[]>([...RECOMMENDED_MODELS])
 const modelsLoading = ref(false)
 
 async function fetchModels() {
   modelsLoading.value = true
   try {
     const res: any = await getAIModels()
-    modelList.value = res.data?.models || []
-    if (modelList.value.length && !modelList.value.includes(model.value)) {
-      model.value = modelList.value[0]
+    const fetched = (res.data?.models || []).filter(Boolean)
+    if (fetched.length) {
+      modelList.value = fetched
+      if (!modelList.value.includes(model.value)) {
+        model.value = modelList.value[0]
+      }
+    } else {
+      // Provider list unavailable — keep the recommended models so the
+      // dropdown is never empty or stuck on a placeholder.
+      modelList.value = [...RECOMMENDED_MODELS]
     }
-  } catch {}
-  finally { modelsLoading.value = false }
+  } catch {
+    modelList.value = [...RECOMMENDED_MODELS]
+  } finally { modelsLoading.value = false }
 }
 const showKey = ref(false)
 const hasSavedKey = ref(false)
@@ -27,6 +39,8 @@ const hasSavedKey = ref(false)
 const testing = ref(false)
 const testResult = ref<"idle" | "success" | "fail">("idle")
 const testMsg = ref("")
+const showKeyHint = ref(false)
+const KEY_REGEN_URL = "https://platform.deepseek.com/api_keys"
 
 // Save
 const saving = ref(false)
@@ -59,24 +73,44 @@ async function testConnection() {
   if (!apiKey.value) {
     testResult.value = "fail"
     testMsg.value = "\u8bf7\u5148\u8f93\u5165 API Key"
+    showKeyHint.value = false
     return
   }
   testing.value = true
   testResult.value = "idle"
   testMsg.value = ""
+  showKeyHint.value = false
   try {
     const res: any = await api.post("/config/ai/test", {
       api_key: apiKey.value,
       base_url: baseUrl.value,
       model: model.value,
     })
-    testResult.value = "success"
-    testMsg.value = res?.message || "\u8fde\u63a5\u6210\u529f"
+    // The test endpoint returns HTTP 200 with { data: { success, message, status } }.
+    const d = res?.data || {}
+    testResult.value = d.success ? "success" : "fail"
+    testMsg.value = d.message || (d.success ? "\u8fde\u63a5\u6210\u529f" : "\u8fde\u63a5\u5931\u8d25")
+    // Surface the "regenerate key" hint only on auth failures (401/403).
+    showKeyHint.value = d.success === false && (d.status === 401 || d.status === 403)
   } catch (e: any) {
     testResult.value = "fail"
     testMsg.value = e?.message || "\u8fde\u63a5\u5931\u8d25"
+    showKeyHint.value = false
   } finally {
     testing.value = false
+  }
+}
+
+// Open the DeepSeek key-management page. In the packaged desktop app we route
+// through the pywebview JS bridge so the OS default browser actually opens;
+// in the dev browser we fall back to window.open.
+function openKeyUrl(e: Event) {
+  e.preventDefault()
+  const wv: any = (window as any).pywebview
+  if (wv && wv.api && typeof wv.api.open_external === "function") {
+    wv.api.open_external(KEY_REGEN_URL)
+  } else {
+    window.open(KEY_REGEN_URL, "_blank", "noopener,noreferrer")
   }
 }
 
@@ -199,7 +233,7 @@ onMounted(async () => {
             </button>
           </div>
         </div>
-        <p class="field-hint">密钥仅保存在后端内存或环境变量（STOCKPILOT_AI_API_KEY）中，不写入磁盘；推荐优先使用环境变量配置</p>
+        <p class="field-hint">密钥会以设备绑定的加密方式保存在本机配置文件（data/ai_config.json）中，仅本机可读、重启后仍有效；也可改用环境变量 STOCKPILOT_AI_API_KEY 配置</p>
       </div>
 
       <!-- Base URL Field -->
@@ -219,13 +253,13 @@ onMounted(async () => {
         <label class="field-label">模型</label>
         <div style="display:flex;gap:8px;align-items:center">
           <select v-model="model" class="model-select">
-            <option v-if="!modelList.length" value="" disabled>点击获取模型列表</option>
             <option v-for="m in modelList" :key="m" :value="m">{{ m }}</option>
           </select>
           <button class="fetch-btn" @click="fetchModels" :disabled="modelsLoading">
             {{ modelsLoading ? '获取中...' : '获取模型' }}
           </button>
         </div>
+        <p class="field-hint">推荐 deepseek-v4-flash（通用）或 deepseek-v4-pro（推理）；旧模型 deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役，请勿使用</p>
       </div>
 
       <!-- Actions -->
@@ -244,6 +278,9 @@ onMounted(async () => {
         <span class="test-icon">{{ testResult === "success" ? "\u2713" : "\u2717" }}</span>
         <span class="test-msg">{{ testMsg }}</span>
       </div>
+      <a v-if="showKeyHint" class="key-hint" :href="KEY_REGEN_URL" target="_blank" rel="noopener noreferrer" @click="openKeyUrl">
+        前往 DeepSeek 平台重新生成 API Key &nearr;
+      </a>
     </div>
 
     <!-- About Card -->
@@ -483,6 +520,23 @@ onMounted(async () => {
 }
 .test-msg {
   color: inherit;
+}
+
+/* Key regeneration hint (auth failure) */
+.key-hint {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.key-hint:hover {
+  background: var(--accent-dim, rgba(56, 189, 248, 0.12));
 }
 
 /* About */

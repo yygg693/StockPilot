@@ -12,12 +12,10 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "pyyaml>=6.0",
-    "pandas>=2.2.0",
-    "numpy>=1.26.0",
-    "openai>=1.55.0",
     "structlog>=24.4.0",
     "aiosqlite>=0.20.0",
     "pyjwt>=2.8.0",
+    "pywebview>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +26,7 @@ dev = [
     "mypy>=1.13",
 ]
 akshare = ["akshare>=1.16.0"]
+qmt = ["xtquant>=250807.1.2"]
 
 [build-system]
 requires = ["hatchling"]

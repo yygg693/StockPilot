@@ -10,7 +10,7 @@ Can be scheduled via cron (Linux) or Task Scheduler (Windows):
     0 2 * * * cd /app && python scripts/backup_db.py --keep 30
 
     # Windows Task Scheduler - daily at 2 AM
-    schtasks /create /tn "StockPilot Backup" /tr "python D:\StockPilot\scripts\backup_db.py --keep 30" /sc daily /st 02:00
+    schtasks /create /tn "StockPilot Backup" /tr "python scripts/backup_db.py --keep 30" /sc daily /st 02:00
 """
 from __future__ import annotations
 

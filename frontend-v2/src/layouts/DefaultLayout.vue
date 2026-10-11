@@ -223,7 +223,18 @@ const navCompliance = [
         </div>
       </header>
       <div class="content">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <!--
+            Cache visited views so tab switches are instant and the per-view
+            animate-in animations don't re-run on every navigation. Keyed by
+            fullPath so parameterized pages (stock/fund detail) get their own
+            cache entry. Combined with useStaleRefresh in data views, cached
+            data auto-refreshes when it's older than the TTL.
+          -->
+          <keep-alive :max="12">
+            <component :is="Component" :key="route.fullPath" />
+          </keep-alive>
+        </router-view>
       </div>
     </div>
   </div>

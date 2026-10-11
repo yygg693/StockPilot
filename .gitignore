@@ -12,6 +12,10 @@ ruff_report.txt
 node_modules/
 frontend-v2/dist/
 
+# PyInstaller build output (large binary bundle — never commit)
+build/
+dist/
+
 # Data
 data/*.db
 data/*.db-wal
@@ -41,3 +45,11 @@ config.yaml
 # IDE
 .vscode/
 .idea/
+
+# Release artifacts — published via GitHub Releases, NOT committed to source
+StockPilot-win64-*.zip
+StockPilot-*.zip
+
+# Internal working docs (contain author-local paths; not for the public repo)
+HANDOVER.md
+项目情况评估报告.md

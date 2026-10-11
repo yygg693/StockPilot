@@ -36,7 +36,7 @@ export function emitParticles(x: number, y: number, count: number, spread = 1.5)
       hue: Math.random() > 0.4 ? 42 : 200,
     })
   }
-  if (particles.length > 150) particles.splice(0, particles.length - 150)
+  if (particles.length > 80) particles.splice(0, particles.length - 80)
   listeners.forEach(fn => fn(particles))
 }
 
@@ -82,19 +82,19 @@ function attachJelly(el: HTMLElement, cfg: {
   particleRate: number
   hoverScale: number
 }) {
-  // Jelly springs - LOW damping for visible wobble oscillation
-  const tiltX = new JellySpring(150, 10)   // rotateX
-  const tiltY = new JellySpring(150, 10)   // rotateY
-  const scaleX = new JellySpring(100, 7)   // horizontal stretch (VERY bouncy)
-  const scaleY = new JellySpring(100, 7)   // vertical squash (VERY bouncy)
-  const glow = new JellySpring(200, 20)    // glow intensity
+  // Springs — only scale/glow are animated now. We deliberately dropped the
+  // rotateX/rotateY + perspective (3D) transform: each liquid element was being
+  // promoted to its own compositing layer, which caused app-wide jank on every
+  // hover/move. A 2D scale wobble is visually close and vastly cheaper.
+  const scaleX = new JellySpring(120, 9)
+  const scaleY = new JellySpring(120, 9)
+  const glow = new JellySpring(220, 22)
 
   let raf = 0
   let hovering = false
   let pressing = false
   let mouseX = 0.5
   let mouseY = 0.5
-  let lastEmit = 0
   let lastTime = 0
 
   scaleX.value = 1; scaleX.target = 1
@@ -111,45 +111,34 @@ function attachJelly(el: HTMLElement, cfg: {
   function onLeave() {
     hovering = false
     pressing = false
-    tiltX.target = 0
-    tiltY.target = 0
     scaleX.target = 1
     scaleY.target = 1
     glow.target = 0
   }
 
   function onMove(e: MouseEvent) {
-    const rect = el.getBoundingClientRect()
-    mouseX = (e.clientX - rect.left) / rect.width
-    mouseY = (e.clientY - rect.top) / rect.height
-
-    // Tilt follows cursor
-    tiltX.target = (mouseY - 0.5) * -2 * cfg.maxTilt
-    tiltY.target = (mouseX - 0.5) * 2 * cfg.maxTilt
-
-    // Glow position
+    // Event-relative offset + cached clientWidth/Height avoids getBoundingClientRect
+    // on every mousemove — that call forces a synchronous layout (a classic jank
+    // source when there are dozens of liquid elements on screen).
+    const w = el.clientWidth || 1
+    const h = el.clientHeight || 1
+    mouseX = e.offsetX / w
+    mouseY = e.offsetY / h
     el.style.setProperty('--glow-x', (mouseX * 100) + '%')
     el.style.setProperty('--glow-y', (mouseY * 100) + '%')
     el.style.setProperty('--glow-size', cfg.glowSize + 'px')
-
-    // Subtle particles on move (less frequent)
-    const now = performance.now()
-    if (now - lastEmit > 120) {
-      emitParticles(e.clientX, e.clientY, 1, pressing ? 2 : 1)
-      lastEmit = now
-    }
   }
 
   function onDown(e: MouseEvent) {
     pressing = true
-    // SQUASH: press down = flatten vertically, stretch horizontally
     scaleX.target = cfg.hoverScale * (1 + cfg.squash)
     scaleY.target = cfg.hoverScale * (1 - cfg.squash * 1.4)
-    // Kick for immediate response
     scaleX.kick(3)
     scaleY.kick(-4)
-    // Small particle burst
-    emitParticles(e.clientX, e.clientY, 6, 2.5)
+    glow.target = 1
+    // Brief particle burst on press only (no hover emission) so the full-screen
+    // particle canvas stays idle during normal navigation.
+    emitParticles(e.clientX, e.clientY, 5, 2.2)
   }
 
   function onUp() {
@@ -167,23 +156,15 @@ function attachJelly(el: HTMLElement, cfg: {
     const dt = Math.min((time - lastTime) / 1000, 0.032)
     lastTime = time
 
-    const rx = tiltX.update(dt)
-    const ry = tiltY.update(dt)
     const sx = scaleX.update(dt)
     const sy = scaleY.update(dt)
     const g = glow.update(dt)
 
-    // Apply transform: perspective + tilt + squash-stretch
-    el.style.transform =
-      'perspective(700px) ' +
-      'rotateX(' + rx.toFixed(2) + 'deg) ' +
-      'rotateY(' + ry.toFixed(2) + 'deg) ' +
-      'scaleX(' + sx.toFixed(4) + ') ' +
-      'scaleY(' + sy.toFixed(4) + ')'
-
+    // 2D-only transform — no perspective/rotate, so no forced 3D layer.
+    el.style.transform = 'scaleX(' + sx.toFixed(4) + ') scaleY(' + sy.toFixed(4) + ')'
     el.style.setProperty('--press', g.toFixed(3))
 
-    const allSettled = tiltX.settled && tiltY.settled && scaleX.settled && scaleY.settled
+    const allSettled = scaleX.settled && scaleY.settled && glow.settled
     if (hovering || !allSettled) {
       raf = requestAnimationFrame(loop)
     } else {

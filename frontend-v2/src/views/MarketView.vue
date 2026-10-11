@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue"
+import { ref } from "vue"
 import { useRouter } from "vue-router"
 import { getTopMovers, getIndex } from "@/api"
+import { useStaleRefresh } from "@/composables/useStaleRefresh"
 
 const router = useRouter()
 const indices = ref<any[]>([])
@@ -13,7 +14,7 @@ function valClass(v: number) { return v > 0 ? "val-up" : v < 0 ? "val-down" : ""
 function fmtPct(v: number) { return (v > 0 ? "+" : "") + (v || 0).toFixed(2) + "%" }
 function goStock(code: string) { router.push(`/stock/${code}`) }
 
-onMounted(async () => {
+async function load() {
   try {
     const [idxRes, upRes, downRes] = await Promise.all([
       getIndex().catch(() => ({ data: [] })),
@@ -24,7 +25,10 @@ onMounted(async () => {
     gainers.value = (upRes as any).data || []
     losers.value = (downRes as any).data || []
   } finally { loading.value = false }
-})
+}
+
+// Load on first visit; refresh on return only when older than 60s.
+useStaleRefresh(load)
 </script>
 
 <template>

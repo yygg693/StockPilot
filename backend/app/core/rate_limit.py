@@ -15,13 +15,22 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"}
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Per-IP sliding-window rate limiter.
 
     AI endpoints (paths starting with /api/ai/) get a stricter limit.
+
+    NOTE: StockPilot is a single-user desktop app that only ever listens on
+    localhost. Rate-limiting loopback requests is pure self-harm (the user's
+    own chat/market-summary calls would get 429'd after a handful of requests),
+    so loopback clients are exempt. The limiter still protects the app if it is
+    ever exposed to a real network interface.
     """
 
-    def __init__(self, app, general_limit: int = 60, ai_limit: int = 20):
+    def __init__(self, app, general_limit: int = 120, ai_limit: int = 60):
         super().__init__(app)
         self.general_limit = general_limit
         self.ai_limit = ai_limit
@@ -59,6 +68,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
         if not client_ip:
             client_ip = request.client.host if request.client else "unknown"
+
+        # Loopback (desktop single-user) is exempt from rate limiting.
+        if client_ip in _LOOPBACK:
+            return await call_next(request)
 
         limit = self._get_limit(path)
         if not self._check(client_ip, limit):
